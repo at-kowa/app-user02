@@ -1,13 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { CURRENT_USER, MOCK_NOW, mockPhotos } from "@/lib/mock-photos";
+import { CURRENT_USER, MOCK_NOW, type Photo } from "@/lib/mock-photos";
+import { hasDatabase, loadPhotos } from "@/lib/photo-source";
 import { canSee, daysLeft, fileNameFor, formatJst, isExpired, jstDate } from "@/lib/photo-rules";
 
 type Scope = "all" | "mine" | "department";
@@ -20,14 +21,35 @@ export function PhotoList() {
   const [scope, setScope] = useState<Scope>("all");
   const [memo, setMemo] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [photos, setPhotos] = useState<Photo[]>([]);
+  const [status, setStatus] = useState<"loading" | "ok" | "error">("loading");
+  const [errorDetail, setErrorDetail] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    loadPhotos()
+      .then((rows) => {
+        if (!alive) return;
+        setPhotos(rows);
+        setStatus("ok");
+      })
+      .catch((e: unknown) => {
+        if (!alive) return;
+        setErrorDetail(e instanceof Error ? e.message : String(e));
+        setStatus("error");
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // Visible to this user and not expired, newest first.
   const visible = useMemo(
     () =>
-      mockPhotos
+      photos
         .filter((p) => canSee(p, CURRENT_USER) && !isExpired(p, now))
-        .sort((a, b) => b.takenAt.localeCompare(a.takenAt)),
-    [now],
+        .sort((a, b) => new Date(b.takenAt).getTime() - new Date(a.takenAt).getTime()),
+    [photos, now],
   );
 
   const senders = useMemo(() => Array.from(new Set(visible.map((p) => p.senderEmail))).sort(), [visible]);
@@ -65,7 +87,16 @@ export function PhotoList() {
 
       <p className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
         練習版です。表示しているのは架空のデータです（現在時刻も架空：{formatJst(MOCK_NOW)}）。業務の写真は送らないでください。
+        <br />
+        データの出どころ：{hasDatabase ? "データベース（Supabase）" : "コードの中の架空データ（.env.local が未設定）"}
       </p>
+
+      {status === "error" && (
+        <p role="alert" className="mb-4 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900">
+          データベースから写真を読み込めませんでした。.env.local の値と、表の読む権限を確かめてから再読み込みしてください。
+          {errorDetail && <span className="mt-1 block text-xs">詳しい内容：{errorDetail}</span>}
+        </p>
+      )}
 
       <section aria-label="絞り込み" className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <div className="grid gap-1">
@@ -127,7 +158,9 @@ export function PhotoList() {
         <span className="text-xs text-muted-foreground">保存はデータベースにつないだ後（手順④⑤）に使えます</span>
       </div>
 
-      {shown.length === 0 ? (
+      {status === "loading" ? (
+        <p className="py-10 text-center text-muted-foreground">読み込み中…</p>
+      ) : shown.length === 0 ? (
         <p className="py-10 text-center text-muted-foreground">
           {visible.length === 0 ? "まだ写真がありません。" : "条件に合う写真がありません。条件を変えてください。"}
         </p>
